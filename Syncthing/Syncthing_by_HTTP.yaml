@@ -1,0 +1,357 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+  - uuid: a571c0d144b14fd4a87a9d9b2aa9fcd6
+    name: Templates/Applications
+  templates:
+  - uuid: 0570ab2287214cd99a7df04c5873163a
+    template: Syncthing by HTTP
+    name: Syncthing by HTTP
+    description: Syncthing monitoring via HTTP Agent para uso com Zabbix Server/Proxy. Sem Zabbix Agent no host Syncthing. Consulta a REST API do Syncthing.
+    vendor:
+      name: EDO Best Man
+      version: 7.4-v3.2
+    groups:
+    - name: Templates/Applications
+    macros:
+    - macro: '{$SYNCTHING.URL}'
+      value: http://127.0.0.1:8384
+      description: URL base da GUI/API Syncthing acessível pelo Zabbix server/proxy.
+    - macro: '{$SYNCTHING.APIKEY}'
+      value: CHANGE_ME
+      description: 'API key do Syncthing. Ideal: sobrescrever no host e marcar como Secret text.'
+    - macro: '{$SYNCTHING.MYID}'
+      value: a^
+      description: 'Regex do Device ID local para excluir do LLD de devices. Exemplo no host: ^I6VHESC-...-I5P4PQ6$'
+    - macro: '{$SYNCTHING.API.OFFLINE.MAX}'
+      value: 4h
+      description: Tempo para considerar API Syncthing offline.
+    - macro: '{$SYNCTHING.FOLDER.PENDING.MAX}'
+      value: 4h
+      description: Tempo máximo com needBytes > 0 antes de alertar pasta pendente/travada.
+    - macro: '{$SYNCTHING.FOLDER.ERRORS.MAX}'
+      value: 30m
+      description: Tempo máximo com errors.count > 0 antes de alertar erros persistentes.
+    - macro: '{$SYNCTHING.DEVICE.OFFLINE.MAX}'
+      value: 2d
+      description: Tempo máximo com remote device disconnected antes de alertar.
+    - macro: '{$SYNCTHING.DEVICE.NAME.EXCLUDE}'
+      value: a^
+      description: 'Regex para excluir device(s) pelo nome no LLD. Exemplo no host: ^fs2$'
+    - macro: '{$SYNCTHING.DEVICE.ID.EXCLUDE}'
+      value: a^
+      description: 'Regex para excluir device(s) pelo Device ID no LLD. Exemplo: ^ABCDEF-.*$'
+    items:
+    - uuid: ce74666171504dcc82e455cddcba724f
+      name: 'Syncthing: API ping'
+      type: HTTP_AGENT
+      key: syncthing.api.ping
+      delay: 1m
+      history: 7d
+      trends: 90d
+      value_type: UNSIGNED
+      url: '{$SYNCTHING.URL}/rest/system/ping'
+      request_method: GET
+      retrieve_mode: BODY
+      timeout: 10s
+      status_codes: '200'
+      headers:
+      - name: X-API-Key
+        value: '{$SYNCTHING.APIKEY}'
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.ping
+      - type: JAVASCRIPT
+        parameters:
+        - 'return value == ''pong'' ? 1 : 0;'
+      triggers:
+      - uuid: 47c918cdb2494a2ea567f868e2334c63
+        expression: max(/Syncthing by HTTP/syncthing.api.ping,{$SYNCTHING.API.OFFLINE.MAX})=0
+        name: 'Syncthing: API offline for {$SYNCTHING.API.OFFLINE.MAX}'
+        priority: HIGH
+        manual_close: 'YES'
+    - uuid: b3922bbb706f45e09d266ca2669b4d1a
+      name: 'Syncthing: local device ID'
+      type: HTTP_AGENT
+      key: syncthing.local.device.id
+      delay: 1h
+      history: 30d
+      value_type: CHAR
+      url: '{$SYNCTHING.URL}/rest/system/status'
+      request_method: GET
+      retrieve_mode: BODY
+      timeout: 10s
+      status_codes: '200'
+      headers:
+      - name: X-API-Key
+        value: '{$SYNCTHING.APIKEY}'
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.myID
+    discovery_rules:
+    - uuid: def769b356c84e6d80d360c86a358bef
+      name: 'Syncthing: Folders discovery'
+      type: HTTP_AGENT
+      key: syncthing.folders.discovery
+      delay: 15m
+      lifetime: 7d
+      url: '{$SYNCTHING.URL}/rest/config/folders'
+      request_method: GET
+      retrieve_mode: BODY
+      timeout: 10s
+      status_codes: '200'
+      headers:
+      - name: X-API-Key
+        value: '{$SYNCTHING.APIKEY}'
+      lld_macro_paths:
+      - lld_macro: '{#FOLDERID}'
+        path: $.id
+      - lld_macro: '{#FOLDERLABEL}'
+        path: $.label
+      - lld_macro: '{#FOLDERPATH}'
+        path: $.path
+      item_prototypes:
+      - uuid: fca52dd2c32147cda48c3abd061d1b05
+        name: 'Syncthing folder [{#FOLDERLABEL}]: status raw'
+        type: HTTP_AGENT
+        key: syncthing.folder.status.raw[{#FOLDERID}]
+        delay: 2m
+        history: 3d
+        value_type: TEXT
+        url: '{$SYNCTHING.URL}/rest/db/status?folder={#FOLDERID}'
+        request_method: GET
+        retrieve_mode: BODY
+        timeout: 10s
+        status_codes: '200'
+        headers:
+        - name: X-API-Key
+          value: '{$SYNCTHING.APIKEY}'
+      - uuid: f72ebbdf267247adb51240f33e415b24
+        name: 'Syncthing folder [{#FOLDERLABEL}]: state'
+        type: DEPENDENT
+        key: syncthing.folder.state[{#FOLDERID}]
+        delay: '0'
+        history: 7d
+        value_type: CHAR
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.state
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        master_item:
+          key: syncthing.folder.status.raw[{#FOLDERID}]
+      - uuid: d567ceb1588348ba8f0b259d937ca1c8
+        name: 'Syncthing folder [{#FOLDERLABEL}]: need bytes'
+        type: DEPENDENT
+        key: syncthing.folder.need.bytes[{#FOLDERID}]
+        delay: '0'
+        history: 14d
+        trends: 90d
+        value_type: UNSIGNED
+        units: B
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.needBytes
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: syncthing.folder.status.raw[{#FOLDERID}]
+      - uuid: cfc137daec8043b19b04ab817a84630a
+        name: 'Syncthing folder [{#FOLDERLABEL}]: local bytes'
+        type: DEPENDENT
+        key: syncthing.folder.local.bytes[{#FOLDERID}]
+        delay: '0'
+        history: 14d
+        trends: 90d
+        value_type: UNSIGNED
+        units: B
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.localBytes
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: syncthing.folder.status.raw[{#FOLDERID}]
+      - uuid: 2ebd16154a58474bbe1efd5f43faffb2
+        name: 'Syncthing folder [{#FOLDERLABEL}]: global bytes'
+        type: DEPENDENT
+        key: syncthing.folder.global.bytes[{#FOLDERID}]
+        delay: '0'
+        history: 14d
+        trends: 90d
+        value_type: UNSIGNED
+        units: B
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.globalBytes
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: syncthing.folder.status.raw[{#FOLDERID}]
+      - uuid: 4c02ecb80ae347f88a57200d623ab44e
+        name: 'Syncthing folder [{#FOLDERLABEL}]: errors raw'
+        type: HTTP_AGENT
+        key: syncthing.folder.errors.raw[{#FOLDERID}]
+        delay: 2m
+        history: 3d
+        value_type: TEXT
+        url: '{$SYNCTHING.URL}/rest/folder/errors?folder={#FOLDERID}'
+        request_method: GET
+        retrieve_mode: BODY
+        timeout: 10s
+        status_codes: '200'
+        headers:
+        - name: X-API-Key
+          value: '{$SYNCTHING.APIKEY}'
+      - uuid: 16fcc1a184f34dee92c2258ec61926a5
+        name: 'Syncthing folder [{#FOLDERLABEL}]: errors count'
+        type: DEPENDENT
+        key: syncthing.folder.errors.count[{#FOLDERID}]
+        delay: '0'
+        history: 14d
+        trends: 90d
+        value_type: UNSIGNED
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.errors.length()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: syncthing.folder.errors.raw[{#FOLDERID}]
+      trigger_prototypes:
+      - uuid: 43fcfa1b9be74021bdf22fb98196e4b0
+        expression: min(/Syncthing by HTTP/syncthing.folder.need.bytes[{#FOLDERID}],{$SYNCTHING.FOLDER.PENDING.MAX})>0
+        name: 'Syncthing folder [{#FOLDERLABEL}]: pending sync for {$SYNCTHING.FOLDER.PENDING.MAX}'
+        priority: WARNING
+        manual_close: 'YES'
+      - uuid: 551e5b76314149228e6fe183342403f6
+        expression: min(/Syncthing by HTTP/syncthing.folder.errors.count[{#FOLDERID}],{$SYNCTHING.FOLDER.ERRORS.MAX})>0
+        name: 'Syncthing folder [{#FOLDERLABEL}]: sync errors for {$SYNCTHING.FOLDER.ERRORS.MAX}'
+        priority: HIGH
+        manual_close: 'YES'
+      - uuid: e4f17b341a2e42cc8e8c3bc75514a208
+        expression: find(/Syncthing by HTTP/syncthing.folder.state[{#FOLDERID}],10m,"regexp","^(error|unknown)$")=1
+        name: 'Syncthing folder [{#FOLDERLABEL}]: state is error/unknown'
+        priority: AVERAGE
+        manual_close: 'YES'
+    - uuid: 93c8d2567b274c208fb0454f5fe520e0
+      name: 'Syncthing: Devices discovery'
+      type: HTTP_AGENT
+      key: syncthing.devices.discovery
+      delay: 30m
+      lifetime: 7d
+      url: '{$SYNCTHING.URL}/rest/config/devices'
+      request_method: GET
+      retrieve_mode: BODY
+      timeout: 10s
+      status_codes: '200'
+      headers:
+      - name: X-API-Key
+        value: '{$SYNCTHING.APIKEY}'
+      filter:
+        evaltype: AND
+        conditions:
+        - macro: '{#DEVICENAME}'
+          value: '{$SYNCTHING.DEVICE.NAME.EXCLUDE}'
+          operator: NOT_MATCHES_REGEX
+          formulaid: A
+        - macro: '{#DEVICEID}'
+          value: '{$SYNCTHING.DEVICE.ID.EXCLUDE}'
+          operator: NOT_MATCHES_REGEX
+          formulaid: B
+        - macro: '{#DEVICEID}'
+          value: '{$SYNCTHING.MYID}'
+          operator: NOT_MATCHES_REGEX
+          formulaid: C
+      lld_macro_paths:
+      - lld_macro: '{#DEVICEID}'
+        path: $.deviceID
+      - lld_macro: '{#DEVICENAME}'
+        path: $.name
+      item_prototypes:
+      - uuid: ced6234a070d4467a7209b271ad3bbdf
+        name: 'Syncthing device [{#DEVICENAME}]: connection raw'
+        type: HTTP_AGENT
+        key: syncthing.device.connection.raw[{#DEVICEID}]
+        delay: 2m
+        history: 3d
+        value_type: TEXT
+        url: '{$SYNCTHING.URL}/rest/system/connections'
+        request_method: GET
+        retrieve_mode: BODY
+        timeout: 10s
+        status_codes: '200'
+        headers:
+        - name: X-API-Key
+          value: '{$SYNCTHING.APIKEY}'
+      - uuid: 32e6c50add3f4a6491062e1ac0dd678e
+        name: 'Syncthing device [{#DEVICENAME}]: connected'
+        type: DEPENDENT
+        key: syncthing.device.connected[{#DEVICEID}]
+        delay: '0'
+        history: 14d
+        trends: 90d
+        value_type: UNSIGNED
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.connections["{#DEVICEID}"].connected
+          error_handler: CUSTOM_VALUE
+          error_handler_params: 'false'
+        - type: JAVASCRIPT
+          parameters:
+          - 'return value === true || value === ''true'' ? 1 : 0;'
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: syncthing.device.connection.raw[{#DEVICEID}]
+      - uuid: 7bef747938694e2c9cc9e99075f08dcc
+        name: 'Syncthing device [{#DEVICENAME}]: address'
+        type: DEPENDENT
+        key: syncthing.device.address[{#DEVICEID}]
+        delay: '0'
+        history: 7d
+        value_type: CHAR
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.connections["{#DEVICEID}"].address
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        master_item:
+          key: syncthing.device.connection.raw[{#DEVICEID}]
+      - uuid: d6002be93949458f962a6f5eee11b897
+        name: 'Syncthing device [{#DEVICENAME}]: last seen timestamp'
+        type: DEPENDENT
+        key: syncthing.device.last_seen.ts[{#DEVICEID}]
+        delay: '0'
+        history: 14d
+        trends: 90d
+        value_type: UNSIGNED
+        units: unixtime
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.connections["{#DEVICEID}"].lastSeen
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '1970-01-01T00:00:00Z'
+        - type: JAVASCRIPT
+          parameters:
+          - 'var t = Date.parse(value); return isNaN(t) ? 0 : Math.floor(t/1000);'
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: syncthing.device.connection.raw[{#DEVICEID}]
+      trigger_prototypes:
+      - uuid: 078afdf741f4417e94841086a5d12c25
+        expression: max(/Syncthing by HTTP/syncthing.device.connected[{#DEVICEID}],{$SYNCTHING.DEVICE.OFFLINE.MAX})=0
+        name: 'Syncthing device [{#DEVICENAME}]: offline for {$SYNCTHING.DEVICE.OFFLINE.MAX}'
+        priority: AVERAGE
+        manual_close: 'YES'
