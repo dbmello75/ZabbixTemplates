@@ -10,13 +10,12 @@ DEFAULT_URL = "https://support.reolink.com/c/rln8-410-rln16-410/"
 
 def usage():
     print(json.dumps({
-        "error": "usage: reolink_fw_check.py <model> <hardware_version> <current_firmware> [url]"
+        "error": "usage: reolink_fw_check.py <model> <hardware_version> <current_firmware> [url]",
+        "scrape_ok": 0,
+        "match_found": 0,
+        "update_available": 0
     }))
-    sys.exit(1)
-
-def fw_build(fw):
-    m = re.search(r"_([0-9]+)$", fw or "")
-    return int(m.group(1)) if m else 0
+    sys.exit(0)
 
 def fw_tuple(fw):
     m = re.search(r"v(\d+)\.(\d+)\.(\d+)\.(\d+)_([0-9]+)", fw or "")
@@ -25,12 +24,10 @@ def fw_tuple(fw):
     return tuple(int(x) for x in m.groups())
 
 def hw_matches(page_hw, wanted_hw):
-    page_hw = page_hw.strip().lower()
-    wanted_hw = wanted_hw.strip().lower()
-
+    page_hw = (page_hw or "").strip().lower()
+    wanted_hw = (wanted_hw or "").strip().lower()
     parts = re.split(r"\s+or\s+|,|/|\|", page_hw)
     parts = [p.strip() for p in parts if p.strip()]
-
     return wanted_hw == page_hw or wanted_hw in parts
 
 def clean_html(raw):
@@ -53,19 +50,23 @@ def main():
     try:
         req = urllib.request.Request(
             url,
-            headers={
-                "User-Agent": "Mozilla/5.0 zabbix-reolink-fw-check/1.0"
-            }
+            headers={"User-Agent": "Mozilla/5.0 zabbix-reolink-fw-check/1.0"}
         )
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=25) as r:
             raw = r.read().decode("utf-8", errors="ignore")
-    except (URLError, HTTPError, TimeoutError) as e:
+    except (URLError, HTTPError, TimeoutError, Exception) as e:
         print(json.dumps({
             "model": model,
             "hardware": hardware,
             "current": current_fw,
-            "error": str(e),
-            "scrape_ok": 0
+            "latest": None,
+            "latest_hw_match": None,
+            "latest_updated": None,
+            "update_available": 0,
+            "scrape_ok": 0,
+            "match_found": 0,
+            "source": url,
+            "error": str(e)
         }))
         sys.exit(0)
 
@@ -74,8 +75,7 @@ def main():
 
     for i, line in enumerate(lines):
         if model.lower() in line.lower() and "nvr" in line.lower():
-            window = lines[i:i+10]
-
+            window = lines[i:i+14]
             hw = None
             fw = None
             updated = None
@@ -91,8 +91,11 @@ def main():
                     break
 
             for w in window[1:]:
-                if "Download Firmware" in w and "Updated" in w:
-                    updated = w.replace("Download Firmware", "").strip()
+                if re.search(r"(updated|jan\.|feb\.|mar\.|apr\.|may|jun\.|jul\.|aug\.|sep\.|oct\.|nov\.|dec\.)", w, re.I):
+                    if "download firmware" in w.lower():
+                        updated = re.sub(r"download firmware", "", w, flags=re.I).strip()
+                    else:
+                        updated = w.strip()
                     break
 
             if hw and fw:
@@ -111,6 +114,8 @@ def main():
             "hardware": hardware,
             "current": current_fw,
             "latest": None,
+            "latest_hw_match": None,
+            "latest_updated": None,
             "update_available": 0,
             "scrape_ok": 1,
             "match_found": 0,
