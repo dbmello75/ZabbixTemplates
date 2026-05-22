@@ -7,7 +7,7 @@ zabbix_export:
   - uuid: ad04e9910b494d7587480bc275c3f61b
     template: Reolink NVR by HTTP
     name: Reolink NVR by HTTP
-    description: 'Template HTTP para Reolink NVR: API health, discovery de cameras por canal/UID, e HDD via GetHddInfo.'
+    description: 'Template HTTP para Reolink NVR: API health, discovery de cameras por canal/UID, e HDD via GetHddInfo. Inclui alertas globais para NVR offline/API sem resposta e falha de autenticação. Inclui graph prototype de temperatura de HDD por disco descoberto.'
     groups:
     - name: Templates/Video surveillance
     items:
@@ -15,7 +15,7 @@ zabbix_export:
       name: 'Reolink: Device info raw'
       type: HTTP_AGENT
       key: reolink.devinfo.raw
-      delay: 1h
+      delay: 1m
       history: '0'
       value_type: TEXT
       url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
@@ -32,6 +32,48 @@ zabbix_export:
         expression: nodata(/Reolink NVR by HTTP/reolink.devinfo.raw,5m)=1
         name: Reolink NVR offline or API not responding
         priority: HIGH
+      description: Raw GetDevInfo response used as API heartbeat and authentication check source.
+    - uuid: 665a163979f04c1da7dfa76d5d7b67ff
+      name: 'Reolink: Authentication status'
+      type: DEPENDENT
+      key: reolink.auth.status
+      delay: '0'
+      history: 30d
+      value_type: UNSIGNED
+      description: 1=authentication/API response OK, 0=invalid user/password/authentication failure or non-JSON API response.
+      preprocessing:
+      - type: JAVASCRIPT
+        parameters:
+        - "var s = String(value || '');\nvar low = s.toLowerCase();\n\n// Fast string checks for common auth failures returned by Reolink/NVR firmwares.\nif (low.indexOf('invalid user') >= 0 ||\n    low.indexOf('invalid username') >= 0 ||\n    low.indexOf('login failed') >= 0 ||\n    low.indexOf('auth failed') >= 0 ||\n    low.indexOf('authentication failed') >= 0 ||\n    low.indexOf('unauthorized') >= 0 ||\n    low.indexOf('forbidden') >= 0 ||\n    low.indexOf('wrong password') >= 0 ||\n    low.indexOf('password error') >= 0 ||\n    low.indexOf('please login') >= 0) {\n  return 0;\n}\n\ntry {\n  var r = JSON.parse(s);\n  var arr = Array.isArray(r) ? r : [r];\n\n  for (var i = 0; i < arr.length; i++) {\n    var o = arr[i] || {};\n    var code = Number(o.code);\n    var rsp = null;\n\n    if (o.error) {\n      if (o.error.rspCode !== undefined) rsp = Number(o.error.rspCode);\n      if (o.error.detail && String(o.error.detail).toLowerCase().match(/user|password|login|auth/)) return 0;\n  \
+          \  }\n\n    // Reolink commonly returns code 0 on success. Negative rspCode often means auth/session errors.\n    if (!isNaN(code) && code !== 0) {\n      if (rsp !== null && !isNaN(rsp) && rsp < 0) return 0;\n      if (o.error) return 0;\n    }\n    if (rsp !== null && !isNaN(rsp) && rsp < 0) return 0;\n  }\n\n  return 1;\n} catch (e) {\n  // Non JSON from the URL is not valid API/auth success.\n  return 0;\n}"
+      master_item:
+        key: reolink.devinfo.raw
+      triggers:
+      - uuid: 2bbc615aaf1f40f3934a32d66d2b270c
+        expression: last(/Reolink NVR by HTTP/reolink.auth.status)=0
+        name: Reolink NVR authentication failed or API returned invalid credentials
+        priority: HIGH
+        description: Dispara quando GetDevInfo responde erro de usuário/senha/autenticação ou resposta não-JSON no endpoint da API.
+    - uuid: 9d3b3894bfaa4fcaa37251f855b7fd2d
+      name: 'Reolink: API JSON status'
+      type: DEPENDENT
+      key: reolink.api.json.status
+      delay: '0'
+      history: 30d
+      value_type: UNSIGNED
+      description: 1=GetDevInfo returned parseable JSON, 0=API path/response invalid. Offline is covered by nodata on raw item.
+      preprocessing:
+      - type: JAVASCRIPT
+        parameters:
+        - "try {\n  var r = JSON.parse(value);\n  if (Array.isArray(r) && r.length > 0) return 1;\n  if (r && typeof r === 'object') return 1;\n  return 0;\n} catch (e) {\n  return 0;\n}"
+      master_item:
+        key: reolink.devinfo.raw
+      triggers:
+      - uuid: 00fc7c57d4b84902915a96fd8b220055
+        expression: last(/Reolink NVR by HTTP/reolink.api.json.status)=0
+        name: Reolink NVR API response is not valid JSON
+        priority: WARNING
+        description: Ajuda a pegar path errado, proxy retornando HTML, captive portal ou resposta inválida.
     - uuid: 89b8497a27d34f36977b5d294f8ddc07
       name: 'Reolink: Channel status raw'
       type: HTTP_AGENT
@@ -303,6 +345,16 @@ zabbix_export:
         expression: last(/Reolink NVR by HTTP/reolink.hdd.temperature[{#HDD.NUMBER}])>{$REOLINK.HDD.TEMP.MAX} and last(/Reolink NVR by HTTP/reolink.hdd.temperature[{#HDD.NUMBER}])>=0
         name: Reolink HDD {#HDD.NUMBER} high temperature
         priority: WARNING
+      graph_prototypes:
+      - uuid: c0964cde11be4ccba978863a72a56788
+        name: 'HDD {#HDD.NUMBER}: Temperature'
+        yaxismin: '0'
+        graph_items:
+        - sortorder: '0'
+          color: 199C0D
+          item:
+            host: Reolink NVR by HTTP
+            key: reolink.hdd.temperature[{#HDD.NUMBER}]
     macros:
     - macro: '{$REOLINK.URL}'
       value: http://CHANGE_ME
