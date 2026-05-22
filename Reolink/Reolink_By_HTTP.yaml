@@ -1,0 +1,320 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+  - uuid: d37f71c7e3f7469bab645852a69a2018
+    name: Templates/Video surveillance
+  templates:
+  - uuid: ad04e9910b494d7587480bc275c3f61b
+    template: Reolink NVR by HTTP
+    name: Reolink NVR by HTTP
+    description: 'Template HTTP para Reolink NVR: API health, discovery de cameras por canal/UID, e HDD via GetHddInfo.'
+    groups:
+    - name: Templates/Video surveillance
+    items:
+    - uuid: 82f262e3e3184275915d748d52becfcd
+      name: 'Reolink: Device info raw'
+      type: HTTP_AGENT
+      key: reolink.devinfo.raw
+      delay: 1h
+      history: '0'
+      value_type: TEXT
+      url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+      query_fields:
+      - name: cmd
+        value: GetDevInfo
+      - name: user
+        value: '{$REOLINK.USER}'
+      - name: password
+        value: '{$REOLINK.PASS}'
+      timeout: 10s
+      triggers:
+      - uuid: bd383bfc50184742b7a3d94758c34fae
+        expression: nodata(/Reolink NVR by HTTP/reolink.devinfo.raw,5m)=1
+        name: Reolink NVR offline or API not responding
+        priority: HIGH
+    - uuid: 89b8497a27d34f36977b5d294f8ddc07
+      name: 'Reolink: Channel status raw'
+      type: HTTP_AGENT
+      key: reolink.channels.raw
+      delay: 1m
+      history: '0'
+      value_type: TEXT
+      url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+      query_fields:
+      - name: cmd
+        value: GetChannelstatus
+      - name: user
+        value: '{$REOLINK.USER}'
+      - name: password
+        value: '{$REOLINK.PASS}'
+      timeout: 10s
+      description: Raw GetChannelstatus response used for camera discovery/troubleshooting.
+    - uuid: 79b2d42d302c412993651f8ec6ca81ea
+      name: 'Reolink: HDD info raw'
+      type: HTTP_AGENT
+      key: reolink.hdd.raw
+      delay: 1m
+      history: '0'
+      value_type: TEXT
+      url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+      query_fields:
+      - name: cmd
+        value: GetHddInfo
+      - name: user
+        value: '{$REOLINK.USER}'
+      - name: password
+        value: '{$REOLINK.PASS}'
+      timeout: 10s
+      description: Raw GetHddInfo response used for HDD discovery/troubleshooting.
+    discovery_rules:
+    - uuid: 35fba65435974e178bd3a5537e10a370
+      name: 'Reolink: Discover cameras/channels'
+      type: HTTP_AGENT
+      key: reolink.camera.discovery
+      delay: 5m
+      lifetime: 30d
+      url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+      query_fields:
+      - name: cmd
+        value: GetChannelstatus
+      - name: user
+        value: '{$REOLINK.USER}'
+      - name: password
+        value: '{$REOLINK.PASS}'
+      timeout: 10s
+      preprocessing:
+      - type: JAVASCRIPT
+        parameters:
+        - "var r = JSON.parse(value);\nvar arr = (r[0] && r[0].value && r[0].value.status) ? r[0].value.status : [];\nvar out = [];\nfor (var i = 0; i < arr.length; i++) {\n  var c = arr[i];\n  if (c.online == 1 || c.uid || c.name || c.typeInfo) {\n    out.push({\n      \"{#CAMERA.CHANNEL}\": String(c.channel),\n      \"{#CAMERA.NAME}\": c.name || (\"Channel \" + c.channel),\n      \"{#CAMERA.UID}\": c.uid || \"\",\n      \"{#CAMERA.TYPE}\": c.typeInfo || \"\"\n    });\n  }\n}\nreturn JSON.stringify({\"data\": out});"
+      item_prototypes:
+      - uuid: bd04498339404cd69f70bef0e268d560
+        name: 'Camera {#CAMERA.CHANNEL} [{#CAMERA.NAME}]: Online'
+        type: HTTP_AGENT
+        key: reolink.camera.online[{#CAMERA.CHANNEL}]
+        delay: 1m
+        history: 30d
+        value_type: UNSIGNED
+        url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+        query_fields:
+        - name: cmd
+          value: GetChannelstatus
+        - name: user
+          value: '{$REOLINK.USER}'
+        - name: password
+          value: '{$REOLINK.PASS}'
+        timeout: 10s
+        preprocessing:
+        - type: JAVASCRIPT
+          parameters:
+          - "var ch = String('{#CAMERA.CHANNEL}');\nvar r = JSON.parse(value);\nvar arr = (r[0] && r[0].value && r[0].value.status) ? r[0].value.status : [];\nfor (var i = 0; i < arr.length; i++) {\n  if (String(arr[i].channel) === ch) {\n    var v = arr[i]['online'];\n    if (v === undefined || v === null) return '';\n    return v;\n  }\n}\nreturn '';"
+        description: 1=online, 0=offline.
+      - uuid: 31cd3f103fb9452ba46e1dd247e9754b
+        name: 'Camera {#CAMERA.CHANNEL} [{#CAMERA.NAME}]: UID/Serial'
+        type: HTTP_AGENT
+        key: reolink.camera.uid[{#CAMERA.CHANNEL}]
+        delay: 5m
+        history: 30d
+        value_type: TEXT
+        url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+        query_fields:
+        - name: cmd
+          value: GetChannelstatus
+        - name: user
+          value: '{$REOLINK.USER}'
+        - name: password
+          value: '{$REOLINK.PASS}'
+        timeout: 10s
+        preprocessing:
+        - type: JAVASCRIPT
+          parameters:
+          - "var ch = String('{#CAMERA.CHANNEL}');\nvar r = JSON.parse(value);\nvar arr = (r[0] && r[0].value && r[0].value.status) ? r[0].value.status : [];\nfor (var i = 0; i < arr.length; i++) {\n  if (String(arr[i].channel) === ch) {\n    var v = arr[i]['uid'];\n    if (v === undefined || v === null) return '';\n    return v;\n  }\n}\nreturn '';"
+        description: Fingerprint/UID returned by NVR; change indicates camera replacement.
+      - uuid: b6bea440f18245738725e97a379f6da8
+        name: 'Camera {#CAMERA.CHANNEL} [{#CAMERA.NAME}]: Model'
+        type: HTTP_AGENT
+        key: reolink.camera.model[{#CAMERA.CHANNEL}]
+        delay: 1h
+        history: 30d
+        value_type: TEXT
+        url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+        query_fields:
+        - name: cmd
+          value: GetChannelstatus
+        - name: user
+          value: '{$REOLINK.USER}'
+        - name: password
+          value: '{$REOLINK.PASS}'
+        timeout: 10s
+        preprocessing:
+        - type: JAVASCRIPT
+          parameters:
+          - "var ch = String('{#CAMERA.CHANNEL}');\nvar r = JSON.parse(value);\nvar arr = (r[0] && r[0].value && r[0].value.status) ? r[0].value.status : [];\nfor (var i = 0; i < arr.length; i++) {\n  if (String(arr[i].channel) === ch) {\n    var v = arr[i]['typeInfo'];\n    if (v === undefined || v === null) return '';\n    return v;\n  }\n}\nreturn '';"
+      - uuid: 764ebb9fd4144c0d87698da18f566d76
+        name: 'Camera {#CAMERA.CHANNEL}: Name'
+        type: HTTP_AGENT
+        key: reolink.camera.name[{#CAMERA.CHANNEL}]
+        delay: 1h
+        history: 30d
+        value_type: TEXT
+        url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+        query_fields:
+        - name: cmd
+          value: GetChannelstatus
+        - name: user
+          value: '{$REOLINK.USER}'
+        - name: password
+          value: '{$REOLINK.PASS}'
+        timeout: 10s
+        preprocessing:
+        - type: JAVASCRIPT
+          parameters:
+          - "var ch = String('{#CAMERA.CHANNEL}');\nvar r = JSON.parse(value);\nvar arr = (r[0] && r[0].value && r[0].value.status) ? r[0].value.status : [];\nfor (var i = 0; i < arr.length; i++) {\n  if (String(arr[i].channel) === ch) {\n    var v = arr[i]['name'];\n    if (v === undefined || v === null) return '';\n    return v;\n  }\n}\nreturn '';"
+      trigger_prototypes:
+      - uuid: 66d5c8cd807f41808af8c1ba02ad8125
+        expression: last(/Reolink NVR by HTTP/reolink.camera.online[{#CAMERA.CHANNEL}])=0
+        name: Reolink camera {#CAMERA.CHANNEL} [{#CAMERA.NAME}] is offline
+        priority: HIGH
+        description: Dispara quando uma câmera descoberta fica offline.
+      - uuid: 051ab57820a64fa19b01a2d65754e7c8
+        expression: change(/Reolink NVR by HTTP/reolink.camera.uid[{#CAMERA.CHANNEL}])=1
+        name: Reolink camera {#CAMERA.CHANNEL} [{#CAMERA.NAME}] UID/serial changed
+        priority: WARNING
+        description: Dispara quando o UID/serial reportado muda, indicando possível troca de câmera.
+    - uuid: 7fc27371230546e78a0f4e2a4c46b4fd
+      name: 'Reolink: Discover HDD/SD storage'
+      type: HTTP_AGENT
+      key: reolink.hdd.discovery
+      delay: 5m
+      lifetime: 30d
+      url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+      query_fields:
+      - name: cmd
+        value: GetHddInfo
+      - name: user
+        value: '{$REOLINK.USER}'
+      - name: password
+        value: '{$REOLINK.PASS}'
+      timeout: 10s
+      preprocessing:
+      - type: JAVASCRIPT
+        parameters:
+        - "var r = JSON.parse(value);\nvar arr = (r[0] && r[0].value && r[0].value.HddInfo) ? r[0].value.HddInfo : [];\nvar out = [];\nfor (var i = 0; i < arr.length; i++) {\n  var d = arr[i];\n  var n = (d.number !== undefined) ? d.number : ((d.id !== undefined) ? d.id : i);\n  if (d.mount == 1 || d.format == 1 || d.capacity > 0 || d.size > 0 || d.status) {\n    out.push({\n      \"{#HDD.NUMBER}\": String(n),\n      \"{#HDD.TYPE}\": String(d.storageType || \"\"),\n      \"{#HDD.CAPACITY}\": String(d.capacity || \"\")\n    });\n  }\n}\nreturn JSON.stringify({\"data\": out});"
+      item_prototypes:
+      - uuid: 6588988a5b8e4e6cb2517a7a00777532
+        name: 'HDD {#HDD.NUMBER}: Present/mounted'
+        type: HTTP_AGENT
+        key: reolink.hdd.present[{#HDD.NUMBER}]
+        delay: 1m
+        history: 30d
+        value_type: UNSIGNED
+        url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+        query_fields:
+        - name: cmd
+          value: GetHddInfo
+        - name: user
+          value: '{$REOLINK.USER}'
+        - name: password
+          value: '{$REOLINK.PASS}'
+        timeout: 10s
+        preprocessing:
+        - type: JAVASCRIPT
+          parameters:
+          - "var disk = String('{#HDD.NUMBER}');\nvar r = JSON.parse(value);\nvar arr = (r[0] && r[0].value && r[0].value.HddInfo) ? r[0].value.HddInfo : [];\nfor (var i = 0; i < arr.length; i++) {\n  var d = arr[i];\n  var n = (d.number !== undefined) ? d.number : ((d.id !== undefined) ? d.id : i);\n  if (String(n) === disk) {\n    var v = (d.mount == 1 || d.format == 1 || d.capacity > 0) ? 1 : 0;\n    return v;\n  }\n}\nreturn 0;"
+        description: 1=present/mounted/formatted/capacity seen; 0=not present.
+      - uuid: 816c30c7ff7542caaac7c35b8a541dc3
+        name: 'HDD {#HDD.NUMBER}: Health OK'
+        type: HTTP_AGENT
+        key: reolink.hdd.ok[{#HDD.NUMBER}]
+        delay: 1m
+        history: 30d
+        value_type: UNSIGNED
+        url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+        query_fields:
+        - name: cmd
+          value: GetHddInfo
+        - name: user
+          value: '{$REOLINK.USER}'
+        - name: password
+          value: '{$REOLINK.PASS}'
+        timeout: 10s
+        preprocessing:
+        - type: JAVASCRIPT
+          parameters:
+          - "var disk = String('{#HDD.NUMBER}');\nvar r = JSON.parse(value);\nvar arr = (r[0] && r[0].value && r[0].value.HddInfo) ? r[0].value.HddInfo : [];\nfor (var i = 0; i < arr.length; i++) {\n  var d = arr[i];\n  var n = (d.number !== undefined) ? d.number : ((d.id !== undefined) ? d.id : i);\n  if (String(n) === disk) {\n    var v = 1;\nif (d.mount !== undefined && Number(d.mount) !== 1) v = 0;\nif (d.format !== undefined && Number(d.format) !== 1) v = 0;\nif (d.status !== undefined && String(d.status).toLowerCase() !== 'ok' && String(d.status).toLowerCase() !== 'normal') v = 0;\n    return v;\n  }\n}\nreturn 0;"
+        description: 1=mount/format/status OK; 0=problem.
+      - uuid: 4a0ae962e92b4e53baaad8520374fc7f
+        name: 'HDD {#HDD.NUMBER}: Temperature'
+        type: HTTP_AGENT
+        key: reolink.hdd.temperature[{#HDD.NUMBER}]
+        delay: 1m
+        history: 30d
+        value_type: FLOAT
+        url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+        query_fields:
+        - name: cmd
+          value: GetHddInfo
+        - name: user
+          value: '{$REOLINK.USER}'
+        - name: password
+          value: '{$REOLINK.PASS}'
+        timeout: 10s
+        preprocessing:
+        - type: JAVASCRIPT
+          parameters:
+          - "var disk = String('{#HDD.NUMBER}');\nvar r = JSON.parse(value);\nvar arr = (r[0] && r[0].value && r[0].value.HddInfo) ? r[0].value.HddInfo : [];\nfor (var i = 0; i < arr.length; i++) {\n  var d = arr[i];\n  var n = (d.number !== undefined) ? d.number : ((d.id !== undefined) ? d.id : i);\n  if (String(n) === disk) {\n    var v = d.temperature; if (v === undefined) v = d.temp; if (v === undefined) v = d.hddTemp; if (v === undefined) v = -1;\n    return v;\n  }\n}\nreturn 0;"
+        units: °C
+        description: Temperature if exposed by firmware. Returns -1 when the API does not expose a temperature field.
+      - uuid: 7ae33144f80141de8f59b82a319441c5
+        name: 'HDD {#HDD.NUMBER}: Recording/storage available'
+        type: HTTP_AGENT
+        key: reolink.hdd.recording.available[{#HDD.NUMBER}]
+        delay: 1m
+        history: 30d
+        value_type: UNSIGNED
+        url: '{$REOLINK.URL}/{$REOLINK.API.PATH}'
+        query_fields:
+        - name: cmd
+          value: GetHddInfo
+        - name: user
+          value: '{$REOLINK.USER}'
+        - name: password
+          value: '{$REOLINK.PASS}'
+        timeout: 10s
+        preprocessing:
+        - type: JAVASCRIPT
+          parameters:
+          - "var disk = String('{#HDD.NUMBER}');\nvar r = JSON.parse(value);\nvar arr = (r[0] && r[0].value && r[0].value.HddInfo) ? r[0].value.HddInfo : [];\nfor (var i = 0; i < arr.length; i++) {\n  var d = arr[i];\n  var n = (d.number !== undefined) ? d.number : ((d.id !== undefined) ? d.id : i);\n  if (String(n) === disk) {\n    var v = (d.mount == 1 && d.format == 1 && d.capacity > 0) ? 1 : 0;\n    return v;\n  }\n}\nreturn 0;"
+        description: 'Proxy for recording availability from GetHddInfo: mounted + formatted + capacity > 0.'
+      trigger_prototypes:
+      - uuid: 405c0b41c63345179161cf6b396f590f
+        expression: last(/Reolink NVR by HTTP/reolink.hdd.present[{#HDD.NUMBER}])=0
+        name: Reolink HDD {#HDD.NUMBER} is missing
+        priority: HIGH
+        description: Dispara quando um disco/slot descoberto deixa de aparecer como presente/montado.
+      - uuid: a533db0833ac4770bfd547d77e08a10d
+        expression: last(/Reolink NVR by HTTP/reolink.hdd.ok[{#HDD.NUMBER}])=0
+        name: Reolink HDD {#HDD.NUMBER} has error/unmounted/unformatted state
+        priority: HIGH
+      - uuid: a257389bcb884040ad783300886bfeb8
+        expression: last(/Reolink NVR by HTTP/reolink.hdd.recording.available[{#HDD.NUMBER}])=0
+        name: Reolink HDD {#HDD.NUMBER} not available for recording
+        priority: HIGH
+      - uuid: f694f49fa7ea487fb2036f7a1111da7e
+        expression: last(/Reolink NVR by HTTP/reolink.hdd.temperature[{#HDD.NUMBER}])>{$REOLINK.HDD.TEMP.MAX} and last(/Reolink NVR by HTTP/reolink.hdd.temperature[{#HDD.NUMBER}])>=0
+        name: Reolink HDD {#HDD.NUMBER} high temperature
+        priority: WARNING
+    macros:
+    - macro: '{$REOLINK.URL}'
+      value: http://CHANGE_ME
+      description: 'Base URL do NVR, sem barra final. Ex: http://192.168.10.50 ou https://192.168.10.50'
+    - macro: '{$REOLINK.API.PATH}'
+      value: api.cgi
+      description: Caminho da API. Use api.cgi ou cgi-bin/api.cgi dependendo do firmware.
+    - macro: '{$REOLINK.USER}'
+      value: admin
+    - macro: '{$REOLINK.PASS}'
+      value: CHANGE_ME
+      type: SECRET_TEXT
+    - macro: '{$REOLINK.HDD.TEMP.MAX}'
+      value: '55'
+      description: Limite de temperatura do HDD em °C.
